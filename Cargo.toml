@@ -1,0 +1,21 @@
+[package]
+name = "airport_finder"
+version = "0.1.0"
+edition = "2021"
+description = "Find the nearest airport from (lat, lng) coordinates. Embeds a global airport database with R-tree spatial index and country polygon boundaries."
+license = "MIT"
+repository = "https://github.com/TeamMilestone/airport_finder"
+keywords = ["airport", "geolocation", "rtree", "gis"]
+categories = ["science::geo"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rstar = "0.12"
+
+[profile.release]
+lto = true
+strip = true
