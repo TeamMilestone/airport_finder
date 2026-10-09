@@ -18,7 +18,8 @@ cd "$(dirname "$0")/.."
 SPINEL=${SPINEL:-spinel}
 CC=${CC:-cc}
 E=AirportFinderExt
-ENTRIES=$E.find,$E.country_at,$E.airport,$E.set_new,$E.set_free,$E.set_size,$E.set_include,$E.set_missing,$E.set_nearest,$E.set_resolve
+ENTRIES=$E.find,$E.country_at,$E.string,$E.airport,$E.airport_record,$E.set_new,$E.set_free,$E.set_size
+ENTRIES=$ENTRIES,$E.set_include,$E.set_missing,$E.set_nearest,$E.set_resolve,$E.out_index,$E.out_km
 CSRC=python/csrc
 
 [ -f embedded_data.rb ] || ruby gen_data.rb

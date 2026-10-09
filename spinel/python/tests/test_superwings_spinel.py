@@ -116,3 +116,28 @@ def test_threads():
     for t in threads:
         t.join()
     assert errors == []
+
+
+def test_answers_are_fresh_dicts():
+    # Airport dicts are made once and kept; callers get copies.
+    before = airport("ICN")
+    a = airport("ICN")
+    a["name"] = "changed"
+    find_nearest_airport(37.46, 126.44)["code"] = "changed"
+    hits = AirportSet(["ICN"]).nearest(37.46, 126.44)
+    hits[0]["iata"] = "changed"
+    assert airport("ICN") == before
+    assert find_nearest_airport(37.46, 126.44)["code"] == "kr.icn"
+    assert AirportSet(["ICN"]).nearest(37.46, 126.44)[0]["iata"] == "ICN"
+
+
+def test_large_limits():
+    codes = [a["iata"] for a in AirportSet(["ICN"]).nearest(0.0, 0.0, limit=0)]
+    assert codes == []
+    s = AirportSet(["HYD", "BOM", "BCN", "ICN", "GMP", "PUS", "CJU", "NRT", "HND", "KIX",
+                    "PEK", "PVG", "HKG", "TPE", "SIN", "BKK", "KUL", "CGK", "MNL", "SGN", "HAN"])
+    hits = s.nearest(37.5665, 126.978, limit=10**9)
+    assert len(hits) == len(s) == 21
+    assert [h["distance_km"] for h in hits] == sorted(h["distance_km"] for h in hits)
+    assert hits[0]["iata"] == "GMP"
+    assert len(s.nearest(37.5665, 126.978, limit=20)) == 20

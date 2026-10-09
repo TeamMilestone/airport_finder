@@ -64,9 +64,12 @@ loaded with ctypes rather than as an extension module.
 It passes superwings' own tests and tsip's `tests/test_airport_finder.py`
 when imported as `superwings`, and gives superwings 0.3.0's answers to
 tsip's calls on all 150,403 points except the 84 the enclave fix changes
-(0.3.0 bundles the crate's 0.3.1). Calls cost 8–12 µs from Python, 2.2–2.7×
-superwings', with the ctypes and JSON round trip. The library takes one
-call at a time; the wrapper holds a lock.
+(0.3.0 bundles the crate's 0.3.1). Calls cost 1.2–1.9× superwings' from
+Python (6 µs near airports, 25 µs anywhere), about the compiled code's own
+ratio: the library answers with airport indices and distances
+(`ext/airport_finder_ext.rb`, `ext/shim.c`), and the wrapper makes each
+airport's dict once. Passing JSON, as 0.1.0 did, cost 2–4×. The library
+takes one call at a time; the wrapper holds a lock.
 
 `--jobs=1` compiles the generated C as one unit. Spinel's default splits a
 unit of 4 MB or more, which the embedded data makes this one.

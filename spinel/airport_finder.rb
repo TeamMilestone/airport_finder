@@ -1297,13 +1297,17 @@ module AirportFinder
   # Raises Error on non-finite coordinates or |lat| > 90, and when no
   # airport is found.
   def self.find_nearest_airport(lat, lng)
-    raise Error, "invalid coordinates" unless valid_coords?(lat, lng)
-    lng = normalize_lng(lng)
+    i = nearest_airport_index(lat, lng)
     st = state
-    loc = nearest_in_country(st, lat, lng)
-    raise Error, loc.error if loc.index < 0
-    i = loc.index
     [st.code_of(i), display_name(st, st.ap_city[i], st.ap_name[i], st.ap_country[i])]
+  end
+
+  # find_nearest_airport's airport, as its index in the embedded data.
+  def self.nearest_airport_index(lat, lng)
+    raise Error, "invalid coordinates" unless valid_coords?(lat, lng)
+    loc = nearest_in_country(state, lat, normalize_lng(lng))
+    raise Error, loc.error if loc.index < 0
+    loc.index
   end
 
   # The country containing a point and the index of its nearest airport (or,
@@ -1370,9 +1374,13 @@ module AirportFinder
 
   # The embedded airport with this IATA code (any case), if any.
   def self.airport(iata)
-    st = state
-    i = st.airports_by_iata.fetch(iata.to_s.strip.upcase, -1).to_i
-    i < 0 ? nil : st.airports[i]
+    i = airport_index(iata)
+    i < 0 ? nil : state.airports[i]
+  end
+
+  # The index in the embedded data of the airport with this IATA code, or -1.
+  def self.airport_index(iata)
+    state.airports_by_iata.fetch(iata.to_s.strip.upcase, -1).to_i
   end
 
   # Lowercase ISO 3166-1 alpha-2 code of the country containing (lat, lng).
@@ -1412,6 +1420,19 @@ module AirportFinder
       @distance_km = distance_km
       @resolution = resolution
       @nearest_code = nearest_code
+    end
+  end
+
+  # Resolved with indices into the embedded data: the airport (-1 for none)
+  # and find_nearest_airport's for the coordinates.
+  class ResolvedAt
+    attr_reader :index, :distance_km, :resolution, :nearest
+
+    def initialize(index, distance_km, resolution, nearest)
+      @index = index
+      @distance_km = distance_km
+      @resolution = resolution
+      @nearest = nearest
     end
   end
 
@@ -1474,9 +1495,7 @@ module AirportFinder
     # `country` (ISO alpha-2, any case) keeps only that country's airports;
     # `max_km` drops any farther away.
     def nearest(lat, lng, limit: 1, country: nil, max_km: nil)
-      raise Error, "invalid coordinates" unless AirportFinder.valid_coords?(lat, lng)
-      lng = AirportFinder.normalize_lng(lng)
-      hits = pool_hits(lat, lng, limit, !country.nil?, country.nil? ? "" : country.downcase, !max_km.nil?, max_km.nil? ? 0.0 : max_km)
+      hits = nearest_hits(lat, lng, limit, !country.nil?, country.nil? ? "" : country, !max_km.nil?, max_km.nil? ? 0.0 : max_km)
       airports = AirportFinder.state.airports
       out = []
       k = 0
@@ -1485,6 +1504,13 @@ module AirportFinder
         k += 1
       end
       out
+    end
+
+    # #nearest's airports as Hits: indices into the embedded data. country
+    # (any case) counts if has_country, max_km if has_max.
+    def nearest_hits(lat, lng, limit, has_country, country, has_max, max_km)
+      raise Error, "invalid coordinates" unless AirportFinder.valid_coords?(lat, lng)
+      pool_hits(lat, AirportFinder.normalize_lng(lng), limit, has_country, country.downcase, has_max, max_km)
     end
 
     # Hits among the set's airports in `country` (lowercase) if
@@ -1511,13 +1537,21 @@ module AirportFinder
     # nil when none applies, including open ocean with no country.
     # Raises Error only on invalid coordinates.
     def resolve(lat, lng, foreign_max_km: nil)
+      r = resolve_at(lat, lng, !foreign_max_km.nil?, foreign_max_km.nil? ? 0.0 : foreign_max_km)
+      return nil if r.index < 0
+      st = AirportFinder.state
+      Resolved.new(st.airports[r.index], r.distance_km, r.resolution, st.code_of(r.nearest))
+    end
+
+    # #resolve with airports as indices into the embedded data: index -1
+    # for nil. foreign_max_km counts if has_max.
+    def resolve_at(lat, lng, has_max, foreign_max_km)
       raise Error, "invalid coordinates" unless AirportFinder.valid_coords?(lat, lng)
       lng = AirportFinder.normalize_lng(lng)
       st = AirportFinder.state
       loc = AirportFinder.nearest_in_country(st, lat, lng)
-      return nil if loc.index < 0
+      return ResolvedAt.new(-1, 0.0, :nearest, -1) if loc.index < 0
       nearest = loc.index
-      nearest_code = st.code_of(nearest)
 
       # A country without airports gets find_nearest_airport's answer from a
       # neighbour up to 4000 km away — that counts as foreign, so it is only
@@ -1525,16 +1559,16 @@ module AirportFinder
       domestic = st.ap_country[nearest].downcase == loc.country
       if domestic && @members.key?(nearest)
         d = AirportFinder.haversine(lat, lng, st.ap_lat[nearest], st.ap_lng[nearest])
-        return Resolved.new(st.airports[nearest], d, :nearest, nearest_code)
+        return ResolvedAt.new(nearest, d, :nearest, nearest)
       end
       hits = pool_hits(lat, lng, 1, true, loc.country, false, 0.0)
       resolution = :same_country
       if hits.size == 0
-        hits = pool_hits(lat, lng, 1, false, "", !foreign_max_km.nil?, foreign_max_km.nil? ? 0.0 : foreign_max_km)
+        hits = pool_hits(lat, lng, 1, false, "", has_max, foreign_max_km)
         resolution = :nearby_foreign
       end
-      return nil if hits.size == 0
-      Resolved.new(st.airports[hits.i[0]], hits.d[0], resolution, nearest_code)
+      return ResolvedAt.new(-1, 0.0, :nearest, nearest) if hits.size == 0
+      ResolvedAt.new(hits.i[0], hits.d[0], resolution, nearest)
     end
   end
 end

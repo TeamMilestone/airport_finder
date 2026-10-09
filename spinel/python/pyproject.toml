@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "superwings-spinel"
-version = "0.1.0"
+version = "0.1.1"
 description = "The superwings API (nearest airport from lat, lng), compiled from Ruby by Spinel."
 readme = "README.md"
 license = { text = "MIT" }

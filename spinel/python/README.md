@@ -30,9 +30,18 @@ bundles the crate's 0.3.1: an enclave is its own country. Maseru is Lesotho
 
 ## Speed
 
-The Rust wheel is faster: from Python a call takes 8–12 µs here against
-superwings' 4–5 µs, of which the ctypes and JSON round trip is a share.
-Loading the data on the first call takes about 35 ms.
+The Rust wheel is faster, by about as much as the compiled code is. From
+Python on an Apple M1 (superwings in parentheses): `find_nearest_airport`
+takes 6 µs near airports (3.6 µs) and 25 µs anywhere (14 µs);
+`AirportSet.nearest(limit=5)` 8.6 µs (6.6 µs), `resolve` 9 µs (4.6 µs),
+`airport` 1 µs (0.8 µs). Loading the data on the first call takes about
+33 ms (26 ms).
+
+The library answers with numbers: airports by index, with distances. The
+module makes an airport's dict the first time that airport comes up and
+hands out copies, so a call formats and parses nothing (0.1.0 passed JSON:
+2–4× superwings). The dicts kept come to about 8 MB if every airport has
+come up.
 
 ## Notes
 
