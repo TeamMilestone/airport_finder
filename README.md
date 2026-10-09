@@ -79,6 +79,16 @@ assert_eq!(country_at(42.5, 1.52).as_deref(), Some("ad"));
 - `code`: `country_code.iata_code` (e.g., `kr.gmp`, `us.jfk`, `jp.hnd`)
 - `name`: `City, Country` (e.g., `Seoul, Korea`)
 
+Both use the airport's own country. In a country without airports (Andorra,
+San Marino, South Georgia, ...) the nearest airport is a neighbour's, so the
+code and name are the neighbour's: South Georgia gives `fk.psy`,
+`Stanley, Falkland Is.`. Use `country_at(lat, lng)` for the country the
+coordinates are in (`gs`).
+
+**Changed in 0.3.0:** earlier versions prefixed the country of the
+coordinates instead (`gs.psy`, `Stanley, S. Geo. and S. Sandw. Is.`).
+Results only differ in those countries without airports.
+
 ## License
 
 MIT

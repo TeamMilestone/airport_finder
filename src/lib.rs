@@ -40,9 +40,8 @@ pub struct Airport {
 }
 
 impl Airport {
-    /// `"country.iata"` in lowercase, under the airport's *own* country
-    /// (`"es.leu"`). [`find_nearest_airport`] instead prefixes the country the
-    /// coordinates are in, which differs near borders (`"ad.leu"`).
+    /// `"country.iata"` in lowercase, under the airport's own country
+    /// (`"es.leu"`) — the code [`find_nearest_airport`] returns.
     pub fn code(&self) -> String {
         format!("{}.{}", self.country.to_ascii_lowercase(), self.iata.to_ascii_lowercase())
     }
@@ -358,8 +357,12 @@ fn find_country_from_nearby_airports(
 /// Find the nearest airport for the given coordinates.
 ///
 /// Returns `(code, name)` where code is `"country.iata"` (e.g. `"kr.gmp"`)
-/// and name is `"City, Country"` (e.g. `"Seoul, Korea"`). The country is the
-/// one the coordinates are in. Errors on non-finite coordinates or |lat| > 90.
+/// and name is `"City, Country"` (e.g. `"Seoul, Korea"`), both under the
+/// airport's own country. For coordinates in a country without airports the
+/// answer comes from a neighbour — Andorra gives `"es.leu"` — and
+/// [`country_at`] tells the country the coordinates are in (`"ad"`).
+/// (Before 0.3.0 both used that country: `"ad.leu"`, `"…, Andorra"`.)
+/// Errors on non-finite coordinates or |lat| > 90.
 pub fn find_nearest_airport(lat: f64, lng: f64) -> Result<(String, String), String> {
     find_nearest_airport_impl(lat, lng)
 }
@@ -367,10 +370,9 @@ pub fn find_nearest_airport(lat: f64, lng: f64) -> Result<(String, String), Stri
 fn find_nearest_airport_impl(lat: f64, lng: f64) -> Result<(String, String), String> {
     let (lat, lng) = checked_coords(lat, lng)?;
     let state = get_state();
-    let (country_code, nearest) = nearest_in_country(state, lat, lng)?;
+    let (_, nearest) = nearest_in_country(state, lat, lng)?;
     let nearest = &state.airports[nearest];
-    let code = format!("{}.{}", country_code, nearest.iata.to_ascii_lowercase());
-    Ok((code, display_name(state, nearest, &country_code)))
+    Ok((nearest.code(), nearest.display_name()))
 }
 
 /// The country containing (lat, lng) and the index of its nearest airport —
@@ -460,9 +462,10 @@ pub fn airport(iata: &str) -> Option<&'static Airport> {
         .map(|&i| &state.airports[i])
 }
 
-/// Lowercase ISO 3166-1 alpha-2 code of the country containing (lat, lng) —
-/// the prefix [`find_nearest_airport`] puts on its code. `None` for invalid
-/// coordinates or open ocean far from any country.
+/// Lowercase ISO 3166-1 alpha-2 code of the country containing (lat, lng).
+/// Matches the prefix of [`find_nearest_airport`]'s code except in countries
+/// without airports (`"ad"` vs `"es.leu"`). `None` for invalid coordinates
+/// or open ocean far from any country.
 pub fn country_at(lat: f64, lng: f64) -> Option<String> {
     let (lat, lng) = checked_coords(lat, lng).ok()?;
     find_country_code(get_state(), lat, lng)
@@ -507,7 +510,7 @@ pub struct Resolved {
     pub distance_km: f64,
     pub resolution: Resolution,
     /// [`find_nearest_airport`]'s code for the coordinates (`"in.bpm"`),
-    /// whether or not that airport is in the set.
+    /// whether or not that airport is in the set or domestic.
     pub nearest_code: String,
 }
 
@@ -626,8 +629,7 @@ impl AirportSet {
         let Ok((country, nearest)) = nearest_in_country(state, lat, lng) else {
             return Ok(None);
         };
-        let nearest_code = format!(
-            "{}.{}", country, state.airports[nearest].iata.to_ascii_lowercase());
+        let nearest_code = state.airports[nearest].code();
 
         // A country without airports gets find_nearest_airport's answer from
         // a neighbour up to 4000 km away — that counts as foreign, so it is
@@ -789,11 +791,24 @@ mod tests {
     }
 
     #[test]
-    fn country_at_matches_code_prefix() {
+    fn country_at_matches_code_prefix_where_there_are_airports() {
         assert_eq!(country_at(37.5665, 126.978).as_deref(), Some("kr"));
-        // Andorra: the code carries the user's country, not the airport's.
+        assert!(find_nearest_airport(37.5665, 126.978).unwrap().0.starts_with("kr."));
+    }
+
+    #[test]
+    fn answer_from_a_neighbour_keeps_its_own_country() {
+        // Andorra and South Georgia have no airports; the answer is the
+        // neighbour's airport, named for the neighbour (0.2: ad.leu, gs.psy).
         assert_eq!(country_at(42.5, 1.52).as_deref(), Some("ad"));
-        assert!(find_nearest_airport(42.5, 1.52).unwrap().0.starts_with("ad."));
+        let (code, name) = find_nearest_airport(42.5, 1.52).unwrap();
+        assert_eq!(code, "es.leu");
+        assert!(name.ends_with(", Spain"), "{name}");
+        assert_eq!(country_at(-54.28, -36.5).as_deref(), Some("gs"));
+        assert_eq!(
+            find_nearest_airport(-54.28, -36.5).unwrap(),
+            ("fk.psy".to_string(), "Stanley, Falkland Is.".to_string()),
+        );
     }
 
     #[test]
@@ -848,16 +863,16 @@ mod tests {
 
     #[test]
     fn resolve_treats_cross_border_answer_as_foreign() {
-        // Andorra has no airports: find_nearest_airport answers ad.leu with
-        // Spain's LEU. Even with LEU in the set it is a foreign pick.
+        // Andorra has no airports: find_nearest_airport answers with Spain's
+        // LEU. Even with LEU in the set it is a foreign pick.
         let set = AirportSet::new(["LEU"]);
         let r = set.resolve(42.5, 1.52, Some(300.0)).unwrap().unwrap();
-        assert_eq!(r.nearest_code, "ad.leu");
+        assert_eq!(r.nearest_code, "es.leu");
         assert_eq!(r.resolution, Resolution::NearbyForeign);
         // South Georgia: the answer is the Falklands' PSY, ~1450 km away —
         // past the limit, so nothing.
         let set = AirportSet::new(["PSY"]);
-        assert_eq!(find_nearest_airport(-54.28, -36.5).unwrap().0, "gs.psy");
+        assert_eq!(find_nearest_airport(-54.28, -36.5).unwrap().0, "fk.psy");
         assert!(set.resolve(-54.28, -36.5, Some(300.0)).unwrap().is_none());
     }
 
