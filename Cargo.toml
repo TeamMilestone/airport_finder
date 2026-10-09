@@ -1,6 +1,6 @@
 [package]
 name = "airport_finder"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 description = "Find the nearest airport from (lat, lng) coordinates. Embeds a global airport database with R-tree spatial index and country polygon boundaries."
 license = "MIT"
