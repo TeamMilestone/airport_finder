@@ -8,7 +8,7 @@ Embeds a global airport database (~10,000 airports) and country polygon boundari
 
 - **Embedded data** — no external files needed at runtime
 - **R-tree spatial index** — O(log n) country detection
-- **Ray-casting** point-in-polygon for precise country boundaries
+- **Ray-casting** point-in-polygon for precise country boundaries; holes count, so enclaves (Lesotho, San Marino, Vatican City) are their own country
 - **16-directional radial search** fallback for edge cases (coastlines, small islands)
 - **Special island handling** (Dokdo, Kerguelen, Bouvet, etc.)
 - **Subset search** — `AirportSet` finds the nearest airport among the ones you choose

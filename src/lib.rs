@@ -496,14 +496,38 @@ fn find_country_code(state: &FinderState, lat: f64, lng: f64) -> Option<String> 
     find_country_from_nearby_airports(state, lat, lng, 1000.0)
 }
 
+/// The country holding the point. Where two do — an enclave drawn over the
+/// country around it without a hole (Vatican City in Italy), or borders
+/// that overlap by a sliver — the one whose ring around the point is
+/// smaller wins, then the lower feature index: never the order the R-tree
+/// happens to list them in.
 fn find_country_exact(state: &FinderState, lat: f64, lng: f64) -> Option<String> {
     let point = AABB::from_point([lng, lat]);
+    let mut best: Option<(f64, usize, &CountryEnvelope)> = None;
     for env in state.country_rtree.locate_in_envelope_intersecting(&point) {
-        if state.country_rings[env.feature_index].iter().any(|ring| ring.contains(lng, lat)) {
-            return Some(env.country_code.clone());
+        let Some(size) = innermost_ring(&state.country_rings[env.feature_index], lng, lat) else {
+            continue;
+        };
+        if best.is_none_or(|(s, i, _)| (size, env.feature_index) < (s, i)) {
+            best = Some((size, env.feature_index, env));
         }
     }
-    None
+    best.map(|(_, _, env)| env.country_code.clone())
+}
+
+/// If a country's rings hold the point, the bounding-box area of the
+/// smallest of them around it. Held means by the even-odd rule over all the
+/// rings: a hole is a ring too, so a point in an enclave cut out of the
+/// country (Lesotho in South Africa) is held twice, and is not the
+/// country's. (Before, any ring holding the point counted.)
+fn innermost_ring(rings: &[Ring], lng: f64, lat: f64) -> Option<f64> {
+    let mut inside = false;
+    let mut smallest = f64::INFINITY;
+    for ring in rings.iter().filter(|ring| ring.contains(lng, lat)) {
+        inside = !inside;
+        smallest = smallest.min((ring.max_lng - ring.min_lng) * (ring.max_lat - ring.min_lat));
+    }
+    inside.then_some(smallest)
 }
 
 fn find_country_from_nearby_airports(
@@ -602,8 +626,9 @@ pub fn airport(iata: &str) -> Option<&'static Airport> {
 
 /// Lowercase ISO 3166-1 alpha-2 code of the country containing (lat, lng).
 /// Matches the prefix of [`find_nearest_airport`]'s code except in countries
-/// without airports (`"ad"` vs `"es.leu"`). `None` for invalid coordinates
-/// or open ocean far from any country.
+/// without airports (`"ad"` vs `"es.leu"`). An enclave is its own country:
+/// Maseru gives `"ls"`, not South Africa's `"za"`. `None` for invalid
+/// coordinates or open ocean far from any country.
 pub fn country_at(lat: f64, lng: f64) -> Option<String> {
     let (lat, lng) = checked_coords(lat, lng).ok()?;
     find_country_code(get_state(), lat, lng)
@@ -924,6 +949,26 @@ mod tests {
     fn country_at_matches_code_prefix_where_there_are_airports() {
         assert_eq!(country_at(37.5665, 126.978).as_deref(), Some("kr"));
         assert!(find_nearest_airport(37.5665, 126.978).unwrap().0.starts_with("kr."));
+    }
+
+    #[test]
+    fn enclaves_are_their_own_country() {
+        // Holes in the country around them (0.3.1 counted the hole as that
+        // country's, or not, by R-tree order), and Vatican City, drawn over
+        // Italy without a hole (Natural Earth's polygon sits ~1.7 km west).
+        for (lat, lng, code) in [
+            (-29.31, 27.48, "ls"), // Maseru, in South Africa's hole (was "za")
+            (43.94, 12.45, "sm"),  // San Marino, in Italy's hole
+            (39.85, 70.58, "tj"),  // Vorukh, in Kyrgyzstan's hole (was "kg")
+            (41.9017, 12.4332, "va"),
+        ] {
+            assert_eq!(country_at(lat, lng).as_deref(), Some(code), "({lat}, {lng})");
+        }
+        assert_eq!(find_nearest_airport(-29.31, 27.48).unwrap().0, "ls.msu");
+        // Around them, the country around them.
+        assert_eq!(country_at(-29.0, 25.0).as_deref(), Some("za"));
+        assert_eq!(country_at(43.8, 12.0).as_deref(), Some("it"));
+        assert_eq!(country_at(40.5, 72.8).as_deref(), Some("kg"));
     }
 
     #[test]
