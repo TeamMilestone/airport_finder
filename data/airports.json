@@ -30864,8 +30864,8 @@
     "lng": -73.46810150146484
   },
   {
-    "iata": "PBI",
-    "name": "Palm Beach International Airport",
+    "iata": "DJT",
+    "name": "President Donald J. Trump International Airport",
     "city": "West Palm Beach",
     "country": "US",
     "lat": 26.683201,
@@ -72542,5 +72542,77 @@
     "country": "CN",
     "lat": 40.542524,
     "lng": 122.3586
+  },
+  {
+    "iata": "WSI",
+    "name": "Western Sydney International (Nancy-Bird Walton) Airport",
+    "city": "Sydney",
+    "country": "AU",
+    "lat": -33.883461,
+    "lng": 150.712981
+  },
+  {
+    "iata": "LHL",
+    "name": "Lachin International Airport",
+    "city": "Lachin",
+    "country": "AZ",
+    "lat": 39.883787,
+    "lng": 46.363137
+  },
+  {
+    "iata": "LSG",
+    "name": "Leshan Airport",
+    "city": "Leshan (Wutongqiao)",
+    "country": "CN",
+    "lat": 29.438627,
+    "lng": 103.749218
+  },
+  {
+    "iata": "DXN",
+    "name": "Noida International Airport",
+    "city": "Gautam Buddha Nagar",
+    "country": "IN",
+    "lat": 28.179868,
+    "lng": 77.611843
+  },
+  {
+    "iata": "HWR",
+    "name": "Halwara International Airport",
+    "city": "Halwara",
+    "country": "IN",
+    "lat": 30.748501,
+    "lng": 75.629799
+  },
+  {
+    "iata": "AVR",
+    "name": "Amravati Airport",
+    "city": "Amravati",
+    "country": "IN",
+    "lat": 20.814608,
+    "lng": 77.717765
+  },
+  {
+    "iata": "CSW",
+    "name": "Cabo San Lucas International Airport",
+    "city": "Cabo San Lucas",
+    "country": "MX",
+    "lat": 22.949072,
+    "lng": -109.939479
+  },
+  {
+    "iata": "TVT",
+    "name": "Tashkent-Khumo International Airport",
+    "city": "Tashkent",
+    "country": "UZ",
+    "lat": 41.312889,
+    "lng": 69.395535
+  },
+  {
+    "iata": "LTH",
+    "name": "Long Thanh International Airport (Under Construction)",
+    "city": "Ho Chi Minh City (Long Thanh)",
+    "country": "VN",
+    "lat": 10.772842,
+    "lng": 107.040596
   }
 ]

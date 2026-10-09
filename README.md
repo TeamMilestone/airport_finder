@@ -11,6 +11,8 @@ Embeds a global airport database (~10,000 airports) and country polygon boundari
 - **Ray-casting** point-in-polygon for precise country boundaries
 - **16-directional radial search** fallback for edge cases (coastlines, small islands)
 - **Special island handling** (Dokdo, Kerguelen, Bouvet, etc.)
+- **Subset search** — `AirportSet` finds the nearest airport among the ones you choose
+- **Input validation** — non-finite coordinates and |lat| > 90 are rejected; any finite longitude is wrapped
 - **C FFI** — usable from Python (ctypes), Elixir (NIF), or any FFI-capable language
 
 ## C FFI
@@ -48,6 +50,28 @@ use airport_finder::find_nearest_airport;
 
 let (code, name) = find_nearest_airport(37.5665, 126.978).unwrap();
 assert!(code.starts_with("kr."));
+```
+
+### Searching a subset
+
+```rust
+use airport_finder::{airport, country_at, AirportSet, Resolution};
+
+// Only the airports you have data for. Unknown codes land in `missing()`.
+let set = AirportSet::new(["HYD", "BOM", "BCN"]);
+
+// Nearest set airport, preferring the country the user is in:
+// Nearest -> SameCountry -> NearbyForeign (within the given km).
+let r = set.resolve(17.385, 78.486, Some(300.0)).unwrap().unwrap();
+assert_eq!(r.nearest_code, "in.bpm");          // find_nearest_airport's answer
+assert_eq!(r.airport.iata, "HYD");             // nearest one in the set
+assert_eq!(r.resolution, Resolution::SameCountry);
+
+// k nearest, optionally within one country and/or a radius.
+let hits = set.nearest(19.07, 72.87, Some("in"), None, 2).unwrap();
+
+assert_eq!(airport("djt").unwrap().city, "West Palm Beach");
+assert_eq!(country_at(42.5, 1.52).as_deref(), Some("ad"));
 ```
 
 ## Output format
