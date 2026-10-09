@@ -1,0 +1,3 @@
+include README.md LICENSE THIRD_PARTY_NOTICES
+recursive-include csrc *.c *.h *.inc *.txt
+recursive-include tests *.py

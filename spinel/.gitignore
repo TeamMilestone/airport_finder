@@ -1,0 +1,9 @@
+# Generated: ruby gen_data.rb / ruby gen_points.rb
+embedded_data.rb
+points/
+# Build and benchmark output
+build/
+out/
+# Built by ext/build.sh
+python/superwings_spinel/libairport_finder_spinel.*
+__pycache__/
