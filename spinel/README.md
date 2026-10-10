@@ -65,7 +65,7 @@ It passes superwings' own tests and tsip's `tests/test_airport_finder.py`
 when imported as `superwings`, and gives superwings 0.3.0's answers to
 tsip's calls on all 150,403 points except the 84 the enclave fix changes
 (0.3.0 bundles the crate's 0.3.1). Built from this tree, calls cost
-1.1–1.5× superwings' from Python (5 µs near airports, 18 µs anywhere);
+1.1–1.4× superwings' from Python (5 µs near airports, 18 µs anywhere);
 0.1.1 on PyPI predates the second pass below and costs 1.2–1.8×. That is
 about the compiled code's own ratio: the library answers with airport
 indices and distances
@@ -79,22 +79,23 @@ unit of 4 MB or more, which the embedded data makes this one.
 ## Results
 
 Apple M1 (Mac mini, 16 GB), macOS 26, 2026-10-10. Rust 1.93.1 (release,
-LTO); Spinel 2026.09.12+7741 (22593ab51) with Apple clang 21, `-O2`;
+LTO); Spinel at master a3260d1a3 (`spinel --version`: 2026.09.12+7752)
+with Apple clang 21, `-O2`;
 CRuby 4.0.7. The crate is 0.3.1 with the enclave fix. Each cell is the
 median over 5 interleaved rounds of each round's median per call; 10,000
-points per set. The machine was lightly loaded (load average about 1);
-rounds of the compiled code varied by 5% at most.
+points per set. The machine was lightly loaded; rounds of the compiled
+code varied by 5% at most.
 
 | | Rust | Spinel | CRuby + YJIT | CRuby | Spinel / Rust | YJIT / Spinel |
 |---|---|---|---|---|---|---|
-| find_nearest_airport, near airports | 3.28 µs | 4.30 µs | 40.1 µs | 109 µs | 1.31× | 9.33× |
-| find_nearest_airport, anywhere | 12.5 µs | 17.4 µs | 152 µs | 535 µs | 1.39× | 8.76× |
-| country_at, anywhere | 11.8 µs | 16.4 µs | 148 µs | 524 µs | 1.39× | 9.03× |
-| AirportSet.all.nearest(limit 5), anywhere | 2.85 µs | 4.25 µs | 32.4 µs | 79.7 µs | 1.49× | 7.62× |
+| find_nearest_airport, near airports | 3.28 µs | 4.30 µs | 40.0 µs | 109 µs | 1.31× | 9.29× |
+| find_nearest_airport, anywhere | 12.5 µs | 17.4 µs | 153 µs | 534 µs | 1.39× | 8.78× |
+| country_at, anywhere | 11.8 µs | 16.4 µs | 147 µs | 524 µs | 1.39× | 9.00× |
+| AirportSet.all.nearest(limit 5), anywhere | 2.85 µs | 4.24 µs | 32.5 µs | 79.7 µs | 1.49× | 7.66× |
 | subset.resolve(300 km), near airports | 3.60 µs | 4.83 µs | 38.6 µs | 118 µs | 1.34× | 8.00× |
-| AirportSet.all (build) | 4.0 ms | 7.7 ms | 41.5 ms | 72.8 ms | 1.93× | 5.41× |
-| first call (parse data, build indices) | 24.9 ms | 33.5 ms | 247 ms | 830 ms | 1.34× | 7.38× |
-| max RSS after first call | 33.9 MB | 26.4 MB | 46.5 MB | 44.4 MB | 0.78× | |
+| AirportSet.all (build) | 4.0 ms | 7.6 ms | 41.3 ms | 72.8 ms | 1.93× | 5.40× |
+| first call (parse data, build indices) | 24.9 ms | 33.5 ms | 246 ms | 831 ms | 1.34× | 7.34× |
+| max RSS after first call | 34.1 MB | 26.4 MB | 46.3 MB | 44.5 MB | 0.77× | |
 
 "Near airports" is within ±0.25° of a random airport; "anywhere" is uniform
 over the sphere, about 70% ocean, where the radial search and the nearby
