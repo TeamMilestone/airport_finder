@@ -64,9 +64,11 @@ loaded with ctypes rather than as an extension module.
 It passes superwings' own tests and tsip's `tests/test_airport_finder.py`
 when imported as `superwings`, and gives superwings 0.3.0's answers to
 tsip's calls on all 150,403 points except the 84 the enclave fix changes
-(0.3.0 bundles the crate's 0.3.1). Calls cost 1.2–1.9× superwings' from
-Python (6 µs near airports, 25 µs anywhere), about the compiled code's own
-ratio: the library answers with airport indices and distances
+(0.3.0 bundles the crate's 0.3.1). Built from this tree, calls cost
+1.1–1.5× superwings' from Python (5 µs near airports, 18 µs anywhere);
+0.1.1 on PyPI predates the second pass below and costs 1.2–1.8×. That is
+about the compiled code's own ratio: the library answers with airport
+indices and distances
 (`ext/airport_finder_ext.rb`, `ext/shim.c`), and the wrapper makes each
 airport's dict once. Passing JSON, as 0.1.0 did, cost 2–4×. The library
 takes one call at a time; the wrapper holds a lock.
@@ -77,23 +79,22 @@ unit of 4 MB or more, which the embedded data makes this one.
 ## Results
 
 Apple M1 (Mac mini, 16 GB), macOS 26, 2026-10-10. Rust 1.93.1 (release,
-LTO); Spinel 2026.09.12+7527 (f5f59352e) with Apple clang 21, `-O2`;
+LTO); Spinel 2026.09.12+7741 (22593ab51) with Apple clang 21, `-O2`;
 CRuby 4.0.7. The crate is 0.3.1 with the enclave fix. Each cell is the
 median over 5 interleaved rounds of each round's median per call; 10,000
-points per set. The machine was not idle (Xcode and an iOS simulator ran
-alongside), so single rounds varied by 15–40%; the ratios held within each
-round.
+points per set. The machine was lightly loaded (load average about 1);
+rounds of the compiled code varied by 5% at most.
 
 | | Rust | Spinel | CRuby + YJIT | CRuby | Spinel / Rust | YJIT / Spinel |
 |---|---|---|---|---|---|---|
-| find_nearest_airport, near airports | 3.28 µs | 5.34 µs | 41.2 µs | 120 µs | 1.63× | 7.71× |
-| find_nearest_airport, anywhere | 12.6 µs | 23.5 µs | 172 µs | 601 µs | 1.87× | 7.30× |
-| country_at, anywhere | 11.8 µs | 22.4 µs | 166 µs | 587 µs | 1.90× | 7.41× |
-| AirportSet.all.nearest(limit 5), anywhere | 2.87 µs | 4.63 µs | 31.9 µs | 79.1 µs | 1.61× | 6.89× |
-| subset.resolve(300 km), near airports | 3.62 µs | 5.89 µs | 41.9 µs | 129 µs | 1.63× | 7.12× |
-| AirportSet.all (build) | 4.0 ms | 7.6 ms | 38.7 ms | 70.8 ms | 1.93× | 5.06× |
-| first call (parse data, build indices) | 24.9 ms | 32.6 ms | 243 ms | 819 ms | 1.31× | 7.45× |
-| max RSS after first call | 33.8 MB | 23.6 MB | 42.5 MB | 40.2 MB | 0.70× | |
+| find_nearest_airport, near airports | 3.28 µs | 4.30 µs | 40.1 µs | 109 µs | 1.31× | 9.33× |
+| find_nearest_airport, anywhere | 12.5 µs | 17.4 µs | 152 µs | 535 µs | 1.39× | 8.76× |
+| country_at, anywhere | 11.8 µs | 16.4 µs | 148 µs | 524 µs | 1.39× | 9.03× |
+| AirportSet.all.nearest(limit 5), anywhere | 2.85 µs | 4.25 µs | 32.4 µs | 79.7 µs | 1.49× | 7.62× |
+| subset.resolve(300 km), near airports | 3.60 µs | 4.83 µs | 38.6 µs | 118 µs | 1.34× | 8.00× |
+| AirportSet.all (build) | 4.0 ms | 7.7 ms | 41.5 ms | 72.8 ms | 1.93× | 5.41× |
+| first call (parse data, build indices) | 24.9 ms | 33.5 ms | 247 ms | 830 ms | 1.34× | 7.38× |
+| max RSS after first call | 33.9 MB | 26.4 MB | 46.5 MB | 44.4 MB | 0.78× | |
 
 "Near airports" is within ±0.25° of a random airport; "anywhere" is uniform
 over the sphere, about 70% ocean, where the radial search and the nearby
@@ -119,3 +120,21 @@ slot that fell back to the boxed path, and why. What it took:
 - A method that ends in a `raise` is typed by its other returns only if a
   value follows the raise.
 - `Hash#[]` returns `Integer?`; `fetch(key, -1).to_i` keeps it an Integer.
+
+A second pass, again with the same algorithms, took another 7–26% off
+(`find_nearest_airport` 5.52 → 4.52 µs, `country_at` 22.64 → 16.82 µs,
+`nearest(5)` 4.63 → 4.29 µs, Spinel da5972974). Spinel keeps an array's
+data and length in hand across a `while` loop only when the loop makes no
+method call; then an element read in range is a compare and a load.
+Otherwise every read goes through the array again. What it took:
+
+- Search a tree with an explicit stack, not by recursion, and test a node's
+  children in a call-free loop before pushing them.
+- Collect candidates first (the rings whose box holds the point), then test
+  them, so the collecting loop is call-free.
+- Keep scratch arrays (the search stack, the heap, the hit list) in the
+  object and reuse them, rather than making them per query.
+- Read hot arrays through instance variables, not locals: a local that
+  holds an array is a GC root, which keeps it in memory, not in a register.
+- Keep the numbers read together in one array: a point's longitude and
+  latitude side by side, a ring's box and band in one record.

@@ -297,28 +297,31 @@ module AirportFinder
   # edges bucketed by latitude band so a ray cast only visits the edges near
   # its latitude.
   #
-  # Ring r's points are xs/ys[first[r], n[r]] (lng, lat). Edge i runs from
-  # point i - 1 (cyclically) to point i; band b's edges are
-  # edges[bstart[band0[r] + b] ... bstart[band0[r] + b + 1]], in edge order.
+  # Ring r's points are pts[2 * first[r] ...] as lng, lat pairs, n[r] of
+  # them. box[5 * r ...] is its min_lng, min_lat, max_lng, max_lat and band
+  # height; band[2 * r] its first band's number in bstart, band[2 * r + 1]
+  # its band count. Band b's edges are the entries bstart[b] ...
+  # bstart[b + 1] of edges, in edge order, each two numbers: the offsets in
+  # pts of the edge's end (point i) and start (point i - 1, cyclically).
+  #
+  # One array per kind of number rather than one per field: Spinel tests
+  # every read of an array, so a ring's fields come from one array, and a
+  # point's two coordinates sit together.
   class Rings
     # Ring edges per latitude band, on average and roughly.
     EDGES_PER_BAND = 8
     MARGIN = 1e-9
 
-    attr_reader :xs, :ys, :first, :n, :min_lng, :min_lat, :max_lng, :max_lat
+    attr_reader :pts, :first, :n, :box, :hits
 
     def initialize
-      @xs = []
-      @ys = []
+      # boxed's answer, kept between calls.
+      @hits = Array.new(64, 0)
+      @pts = []
       @first = []
       @n = []
-      @min_lng = []
-      @min_lat = []
-      @max_lng = []
-      @max_lat = []
-      @band_height = []
-      @bands = []
-      @band0 = []
+      @box = []
+      @band = []
       @bstart = []
       @edges = []
     end
@@ -335,13 +338,13 @@ module AirportFinder
       min_lat = INF
       max_lng = -INF
       max_lat = -INF
-      @first << @xs.size
+      base = @pts.size / 2
+      @first << base
       i = 0
       while i < n
         x = xs[i]
         y = ys[i]
-        @xs << x
-        @ys << y
+        @pts << x << y
         min_lng = x if x < min_lng
         min_lat = y if y < min_lat
         max_lng = x if x > max_lng
@@ -372,7 +375,7 @@ module AirportFinder
         i += 1
       end
       start = []
-      at = @edges.size
+      at = @edges.size / 2
       b = 0
       while b < bands
         start << at
@@ -381,12 +384,13 @@ module AirportFinder
         b += 1
       end
       @bstart << at
-      @edges << 0 while @edges.size < at
+      @edges << 0 while @edges.size < 2 * at
       i = 0
       while i < n
         b = lo_band[i]
         while b <= hi_band[i]
-          @edges[start[b]] = i
+          @edges[2 * start[b]] = 2 * (base + i)
+          @edges[2 * start[b] + 1] = 2 * (base + (i == 0 ? n - 1 : i - 1))
           start[b] += 1
           b += 1
         end
@@ -394,46 +398,64 @@ module AirportFinder
       end
 
       @n << n
-      @min_lng << min_lng
-      @min_lat << min_lat
-      @max_lng << max_lng
-      @max_lat << max_lat
-      @band_height << band_height
-      @bands << bands
-      @band0 << @bstart.size - bands - 1
+      @box << min_lng << min_lat << max_lng << max_lat << band_height
+      @band << @bstart.size - bands - 1 << bands
       r
     end
 
-    # Same answer as a ray cast over the whole ring. Outside the bounding box
-    # the ray crosses the ring an even number of times (or never), so it is
-    # skipped. Latitude is compared exactly as the ray cast does; longitude
-    # gets a margin far above the rounding of its intersections. Within it,
-    # only the edges in `lat`'s band can cross the ray, and the parity of the
-    # crossings does not depend on the order they are seen.
-    def contains(r, lng, lat)
-      min_lat = @min_lat[r]
-      if lat < min_lat || lat >= @max_lat[r] || lng < @min_lng[r] - MARGIN || lng > @max_lng[r] + MARGIN
-        return false
+    # The rings r ... stop whose bounding box can hold (lng, lat), into
+    # hits[0 ...]; how many. Latitude is compared exactly as the ray cast
+    # does; longitude gets a margin far above the rounding of its
+    # intersections. Outside the box the ray crosses the ring an even
+    # number of times (or never), so contains skips those rings.
+    #
+    # The hot methods read their arrays through instance variables: an
+    # array in a local is a GC root, which keeps the local in memory.
+    def boxed(r, stop, lng, lat)
+      k = 0
+      while r < stop
+        b = r * 5
+        unless lat < @box[b + 1] || lat >= @box[b + 3] || lng < @box[b] - MARGIN || lng > @box[b + 2] + MARGIN
+          @hits[k] = r
+          k += 1
+        end
+        r += 1
       end
-      n = @n[r]
-      base = @first[r]
-      b = @band0[r] + AirportFinder.band_of(lat, min_lat, @band_height[r], @bands[r])
-      k = @bstart[b]
-      stop = @bstart[b + 1]
+      k
+    end
+
+    # Whether ring r, whose box can hold (lng, lat) (boxed), does: the ray
+    # cast over only the edges in `lat`'s band, as the parity of the
+    # crossings does not depend on the order they are seen.
+    def cast(r, lng, lat)
+      b = @band[2 * r] + AirportFinder.band_of(lat, @box[r * 5 + 1], @box[r * 5 + 4], @band[2 * r + 1])
+      k = 2 * @bstart[b]
+      stop = 2 * @bstart[b + 1]
       inside = false
       while k < stop
         i = @edges[k]
-        j = base + (i == 0 ? n - 1 : i - 1)
-        i += base
-        yi = @ys[i]
-        yj = @ys[j]
+        j = @edges[k + 1]
+        yi = @pts[i + 1]
+        yj = @pts[j + 1]
         if (yi > lat) != (yj > lat)
-          xi = @xs[i]
-          inside = !inside if lng < (@xs[j] - xi) * (lat - yi) / (yj - yi) + xi
+          xi = @pts[i]
+          inside = !inside if lng < (@pts[j] - xi) * (lat - yi) / (yj - yi) + xi
         end
-        k += 1
+        k += 2
       end
       inside
+    end
+
+    # Same answer as a ray cast over the whole of ring r: what
+    # innermost_ring does for one ring.
+    def contains(r, lng, lat)
+      boxed(r, r + 1, lng, lat) == 1 && cast(r, lng, lat)
+    end
+
+    # The area of ring r's bounding box.
+    def area(r)
+      b = r * 5
+      (@box[b + 2] - @box[b]) * (@box[b + 3] - @box[b + 1])
     end
   end
 
@@ -451,39 +473,49 @@ module AirportFinder
   # R-tree
   # -------------------------------------------------------------------------
 
-  # A static R-tree over boxes lo/hi[i * dims + k] (a point has lo == hi),
-  # bulk loaded by sort-tile-recursive packing into nodes of up to
-  # NODE_SIZE children — rstar's default maximum.
+  # A static R-tree over boxes, bulk loaded by sort-tile-recursive packing
+  # into nodes of up to NODE_SIZE children — rstar's default maximum. Item
+  # i's box is box[2 * dims * i ...]: its low corner, then its high corner
+  # (a point has both the same).
   #
   # Node n's children are kids[first[n], count[n]]: item numbers if leaf[n]
-  # is 1, else node numbers. Its box is nlo/nhi[n * dims + k].
+  # is 1, else node numbers. Its box is nbox[2 * dims * n ...], laid out as
+  # an item's.
+  #
+  # The searches keep their nodes to visit on a stack rather than recurse,
+  # and test a node's box before they push it: their loops over children
+  # then do nothing but read and compare, which Spinel compiles with the
+  # arrays' headers held in C locals.
   class RTree
     NODE_SIZE = 6
 
-    attr_reader :root, :first, :count, :leaf, :kids, :nlo, :nhi, :lo, :hi
+    attr_reader :root, :first, :count, :leaf, :kids, :nbox, :box, :hits
 
-    def initialize(dims, lo, hi)
+    def initialize(dims, box)
       @dims = dims
-      @lo = lo
-      @hi = hi
+      @box = box
       @first = []
       @count = []
       @leaf = []
       @kids = []
-      @nlo = []
-      @nhi = []
+      @nbox = []
       @root = -1
-      n = lo.size / dims
+      # The nodes a search has still to visit, and containing2's answer,
+      # kept between searches.
+      @stack = Array.new(64, 0)
+      @hits = Array.new(16, 0)
+      n = box.size / (2 * dims)
       if n > 0
-        level = pack((0...n).to_a, lo, hi, 1)
-        level = pack(level, @nlo, @nhi, 0) while level.size > 1
+        level = pack((0...n).to_a, box, 1)
+        level = pack(level, @nbox, 0) while level.size > 1
         @root = level[0]
       end
     end
 
-    # Parent nodes over `ids`, whose boxes are in blo/bhi.
-    def pack(ids, blo, bhi, leaf)
+    # Parent nodes over `ids`, whose boxes are in `boxes`.
+    def pack(ids, boxes, leaf)
       d = @dims
+      w = 2 * d
       n = ids.size
       centers = Array.new(n * d, 0.0)
       p = 0
@@ -491,7 +523,7 @@ module AirportFinder
         id = ids[p]
         k = 0
         while k < d
-          centers[p * d + k] = (blo[id * d + k] + bhi[id * d + k]) * 0.5
+          centers[p * d + k] = (boxes[id * w + k] + boxes[id * w + d + k]) * 0.5
           k += 1
         end
         p += 1
@@ -507,8 +539,12 @@ module AirportFinder
         @leaf << leaf
         k = 0
         while k < d
-          @nlo << INF
-          @nhi << -INF
+          @nbox << INF
+          k += 1
+        end
+        k = 0
+        while k < d
+          @nbox << -INF
           k += 1
         end
         c = 0
@@ -517,10 +553,10 @@ module AirportFinder
           @kids << id
           k = 0
           while k < d
-            v = blo[id * d + k]
-            @nlo[node * d + k] = v if v < @nlo[node * d + k]
-            v = bhi[id * d + k]
-            @nhi[node * d + k] = v if v > @nhi[node * d + k]
+            v = boxes[id * w + k]
+            @nbox[node * w + k] = v if v < @nbox[node * w + k]
+            v = boxes[id * w + d + k]
+            @nbox[node * w + d + k] = v if v > @nbox[node * w + d + k]
             k += 1
           end
           c += 1
@@ -554,102 +590,104 @@ module AirportFinder
       out
     end
 
-    # Squared distance from (x, y, z) to node's box in a 3-d tree.
-    def mindist3(node, x, y, z)
-      b = node * 3
-      lo = @nlo[b]
-      hi = @nhi[b]
-      dx = x < lo ? lo - x : (x > hi ? x - hi : 0.0)
-      lo = @nlo[b + 1]
-      hi = @nhi[b + 1]
-      dy = y < lo ? lo - y : (y > hi ? y - hi : 0.0)
-      lo = @nlo[b + 2]
-      hi = @nhi[b + 2]
-      dz = z < lo ? lo - z : (z > hi ? z - hi : 0.0)
-      dx * dx + dy * dy + dz * dz
+    # The items of a 2-d tree whose box holds (x, y), into hits[0 ...]; how
+    # many, in no particular order.
+    def containing2(x, y)
+      root = @root
+      return 0 if root < 0
+      b = root * 4
+      return 0 if x < @nbox[b] || x > @nbox[b + 2] || y < @nbox[b + 1] || y > @nbox[b + 3]
+      @stack[0] = root
+      sp = 1
+      n = 0
+      while sp > 0
+        sp -= 1
+        node = @stack[sp]
+        s = @first[node]
+        e = s + @count[node]
+        if @leaf[node] == 1
+          while s < e
+            b = @kids[s] * 4
+            if x >= @box[b] && x <= @box[b + 2] && y >= @box[b + 1] && y <= @box[b + 3]
+              @hits[n] = @kids[s]
+              n += 1
+            end
+            s += 1
+          end
+        else
+          while s < e
+            b = @kids[s] * 4
+            unless x < @nbox[b] || x > @nbox[b + 2] || y < @nbox[b + 1] || y > @nbox[b + 3]
+              @stack[sp] = @kids[s]
+              sp += 1
+            end
+            s += 1
+          end
+        end
+      end
+      n
     end
 
-    # Squared distance from (x, y, z) to point item of a 3-d tree.
-    def dist3(item, x, y, z)
-      b = item * 3
-      dx = @lo[b] - x
-      dy = @lo[b + 1] - y
-      dz = @lo[b + 2] - z
+    # Squared distance from (x, y, z) to node's box in a 3-d tree.
+    def mindist3(node, x, y, z)
+      b = node * 6
+      lo = @nbox[b]
+      hi = @nbox[b + 3]
+      dx = x < lo ? lo - x : (x > hi ? x - hi : 0.0)
+      lo = @nbox[b + 1]
+      hi = @nbox[b + 4]
+      dy = y < lo ? lo - y : (y > hi ? y - hi : 0.0)
+      lo = @nbox[b + 2]
+      hi = @nbox[b + 5]
+      dz = z < lo ? lo - z : (z > hi ? z - hi : 0.0)
       dx * dx + dy * dy + dz * dz
     end
 
     # Whether a point item of a 3-d tree is within squared distance r2.
     def any_within3?(x, y, z, r2)
-      @root >= 0 && within3?(@root, x, y, z, r2)
-    end
-
-    def within3?(node, x, y, z, r2)
-      return false if mindist3(node, x, y, z) > r2
-      s = @first[node]
-      e = s + @count[node]
-      while s < e
+      root = @root
+      return false if root < 0 || mindist3(root, x, y, z) > r2
+      @stack[0] = root
+      sp = 1
+      found = false
+      while sp > 0 && !found
+        sp -= 1
+        node = @stack[sp]
+        s = @first[node]
+        e = s + @count[node]
         if @leaf[node] == 1
-          return true if dist3(@kids[s], x, y, z) <= r2
-        elsif within3?(@kids[s], x, y, z, r2)
-          return true
+          while s < e
+            b = @kids[s] * 6
+            dx = @box[b] - x
+            dy = @box[b + 1] - y
+            dz = @box[b + 2] - z
+            if dx * dx + dy * dy + dz * dz <= r2
+              found = true
+              break
+            end
+            s += 1
+          end
+        else
+          while s < e
+            b = @kids[s] * 6
+            lo = @nbox[b]
+            hi = @nbox[b + 3]
+            dx = x < lo ? lo - x : (x > hi ? x - hi : 0.0)
+            lo = @nbox[b + 1]
+            hi = @nbox[b + 4]
+            dy = y < lo ? lo - y : (y > hi ? y - hi : 0.0)
+            lo = @nbox[b + 2]
+            hi = @nbox[b + 5]
+            dz = z < lo ? lo - z : (z > hi ? z - hi : 0.0)
+            unless dx * dx + dy * dy + dz * dz > r2
+              @stack[sp] = @kids[s]
+              sp += 1
+            end
+            s += 1
+          end
         end
-        s += 1
       end
-      false
-    end
-  end
-
-  # A binary min-heap of (distance, reference) pairs.
-  class MinHeap
-    def initialize
-      @d = []
-      @r = []
-    end
-
-    def size
-      @d.size
-    end
-
-    def top_d
-      @d[0]
-    end
-
-    def top_r
-      @r[0]
-    end
-
-    def push(d, r)
-      @d << d
-      @r << r
-      i = @d.size - 1
-      while i > 0
-        p = (i - 1) / 2
-        break if @d[p] <= d
-        @d[i] = @d[p]
-        @r[i] = @r[p]
-        i = p
-      end
-      @d[i] = d
-      @r[i] = r
-    end
-
-    def pop
-      d = @d.pop
-      r = @r.pop
-      n = @d.size
-      return if n == 0
-      i = 0
-      while true
-        c = 2 * i + 1
-        break if c >= n
-        c += 1 if c + 1 < n && @d[c + 1] < @d[c]
-        break if d <= @d[c]
-        @d[i] = @d[c]
-        @r[i] = @r[c]
-        i = c
-      end
-      @d[i] = d
-      @r[i] = r
+      found
     end
   end
 
@@ -743,10 +781,9 @@ module AirportFinder
       @country_names = {}
       @env_code = []
       @env_feature = []
-      @env_lo = []
-      @env_hi = []
+      @env_box = []
       parse_countries(JsonReader.new(countries_json, 0))
-      @country_tree = RTree.new(2, @env_lo, @env_hi)
+      @country_tree = RTree.new(2, @env_box)
 
       @all_airports = AirportIndex.new(@ap_lat, @ap_lng, (0...@ap_iata.size).to_a)
       @airports_by_country = {}
@@ -948,27 +985,25 @@ module AirportFinder
       max_lat = -90.0
       min_lng = 180.0
       max_lng = -180.0
-      xs = @rings.xs
-      ys = @rings.ys
+      pts = @rings.pts
       r = @feature_ring0[feature]
       stop = r + @feature_rings[feature]
       while r < stop
-        i = @rings.first[r]
-        e = i + @rings.n[r]
+        i = 2 * @rings.first[r]
+        e = i + 2 * @rings.n[r]
         while i < e
-          lng = xs[i]
-          lat = ys[i]
+          lng = pts[i]
+          lat = pts[i + 1]
           min_lat = lat if lat < min_lat
           max_lat = lat if lat > max_lat
           min_lng = lng if lng < min_lng
           max_lng = lng if lng > max_lng
-          i += 1
+          i += 2
         end
         r += 1
       end
       return nil if min_lat >= 90.0 || max_lat <= -90.0
-      @env_lo << min_lng << min_lat
-      @env_hi << max_lng << max_lat
+      @env_box << min_lng << min_lat << max_lng << max_lat
       @env_code << code
       @env_feature << feature
       nil
@@ -980,49 +1015,23 @@ module AirportFinder
     # ring around the point is smaller wins, then the lower feature index:
     # never the order the R-tree happens to list them in.
     def country_exact(lat, lng)
-      t = @country_tree
-      return nil if t.root < 0
-      env = exact_in(t, t.root, lng, lat, -1)
-      env < 0 ? nil : @env_code[env]
-    end
-
-    # The better of `best` (an envelope, or -1) and the envelopes under node
-    # whose country holds (x, y).
-    def exact_in(t, node, x, y, best)
-      nlo = t.nlo
-      nhi = t.nhi
-      b = node * 2
-      return best if x < nlo[b] || x > nhi[b] || y < nlo[b + 1] || y > nhi[b + 1]
-      kids = t.kids
-      s = t.first[node]
-      e = s + t.count[node]
-      if t.leaf[node] == 1
-        lo = t.lo
-        hi = t.hi
-        while s < e
-          env = kids[s]
-          b = env * 2
-          if x >= lo[b] && x <= hi[b] && y >= lo[b + 1] && y <= hi[b + 1]
-            size = innermost_ring(@env_feature[env], x, y)
-            best = env if size >= 0.0 && (best < 0 || better?(size, env, best, x, y))
-          end
-          s += 1
+      n = @country_tree.containing2(lng, lat)
+      best = -1
+      best_size = 0.0
+      best_feature = 0
+      k = 0
+      while k < n
+        env = @country_tree.hits[k]
+        feature = @env_feature[env]
+        size = innermost_ring(feature, lng, lat)
+        if size >= 0.0 && (best < 0 || size < best_size || (size == best_size && feature < best_feature))
+          best = env
+          best_size = size
+          best_feature = feature
         end
-      else
-        while s < e
-          best = exact_in(t, kids[s], x, y, best)
-          s += 1
-        end
+        k += 1
       end
-      best
-    end
-
-    # Whether envelope env, whose ring around (x, y) has area `size`, beats
-    # envelope best, which holds the point too.
-    def better?(size, env, best, x, y)
-      best_size = innermost_ring(@env_feature[best], x, y)
-      return size < best_size if size != best_size
-      @env_feature[env] < @env_feature[best]
+      best < 0 ? nil : @env_code[best]
     end
 
     # If a country's rings hold the point, the bounding-box area of the
@@ -1032,16 +1041,18 @@ module AirportFinder
     # the country's.
     def innermost_ring(feature, lng, lat)
       r = @feature_ring0[feature]
-      stop = r + @feature_rings[feature]
+      n = @rings.boxed(r, r + @feature_rings[feature], lng, lat)
       inside = false
       smallest = INF
-      while r < stop
-        if @rings.contains(r, lng, lat)
+      k = 0
+      while k < n
+        r = @rings.hits[k]
+        if @rings.cast(r, lng, lat)
           inside = !inside
-          size = (@rings.max_lng[r] - @rings.min_lng[r]) * (@rings.max_lat[r] - @rings.min_lat[r])
+          size = @rings.area(r)
           smallest = size if size < smallest
         end
-        r += 1
+        k += 1
       end
       inside ? smallest : -1.0
     end
@@ -1131,13 +1142,31 @@ module AirportFinder
       @lats = lats
       @lngs = lngs
       @ids = indices
-      pts = []
+      box = []
       indices.each do |i|
         la = lats[i] * DEG
         ln = lngs[i] * DEG
-        pts << Math.cos(la) * Math.cos(ln) << Math.cos(la) * Math.sin(ln) << Math.sin(la)
+        x = Math.cos(la) * Math.cos(ln)
+        y = Math.cos(la) * Math.sin(ln)
+        z = Math.sin(la)
+        box << x << y << z << x << y << z
       end
-      @tree = RTree.new(3, pts, pts)
+      @tree = RTree.new(3, box)
+      # The tree's arrays, for nearest to read through instance variables.
+      @first = @tree.first
+      @count = @tree.count
+      @leaf = @tree.leaf
+      @kids = @tree.kids
+      @nbox = @tree.nbox
+      @box = @tree.box
+      # nearest's binary min-heap of (distance, reference) pairs, the first
+      # @heap_n of these, kept between searches; and the children of the
+      # node it expands.
+      @heap_d = Array.new(64, 0.0)
+      @heap_r = Array.new(64, 0)
+      @heap_n = 0
+      @kid_d = Array.new(RTree::NODE_SIZE, 0.0)
+      @kid_r = Array.new(RTree::NODE_SIZE, 0)
     end
 
     # Up to `limit` airports nearest to (lat, lng) by haversine, closest
@@ -1147,8 +1176,7 @@ module AirportFinder
     def nearest(lat, lng, has_max, max_km, limit)
       hd = []
       hi = []
-      t = @tree
-      if limit > 0 && t.root >= 0
+      if limit > 0 && @tree.root >= 0
         la = lat * DEG
         ln = lng * DEG
         qx = Math.cos(la) * Math.cos(ln)
@@ -1157,20 +1185,16 @@ module AirportFinder
         cutoff = has_max ? AirportFinder.chord2_bound(max_km) : INF
         # Haversine can come out NaN at the antipode, and total_cmp may sort
         # that first; without max_km to drop it, look at every airport.
-        exhaustive = !has_max && t.any_within3?(-qx, -qy, -qz, 1e-9)
+        exhaustive = !has_max && @tree.any_within3?(-qx, -qy, -qz, 1e-9)
 
         # Best first: nodes by the distance to their box, airports (encoded
         # -1 - item) by their own, so airports come out closest first.
-        first = t.first
-        count = t.count
-        leaf = t.leaf
-        kids = t.kids
-        heap = MinHeap.new
-        heap.push(t.mindist3(t.root, qx, qy, qz), t.root)
-        while heap.size > 0
-          d2 = heap.top_d
-          ref = heap.top_r
-          heap.pop
+        @heap_n = 0
+        heap_push(@tree.mindist3(@tree.root, qx, qy, qz), @tree.root)
+        while @heap_n > 0
+          d2 = @heap_d[0]
+          ref = @heap_r[0]
+          heap_pop
           break if d2 > cutoff
           if ref < 0
             i = @ids[-1 - ref]
@@ -1185,20 +1209,44 @@ module AirportFinder
               end
             end
           else
-            s = first[ref]
-            e = s + count[ref]
-            if leaf[ref] == 1
+            # The children's distances first, in a loop of reads and
+            # arithmetic alone; then onto the heap, in the same order.
+            s = @first[ref]
+            e = s + @count[ref]
+            m = 0
+            if @leaf[ref] == 1
               while s < e
-                item = kids[s]
-                heap.push(t.dist3(item, qx, qy, qz), -1 - item)
+                o = @kids[s] * 6
+                dx = @box[o] - qx
+                dy = @box[o + 1] - qy
+                dz = @box[o + 2] - qz
+                @kid_d[m] = dx * dx + dy * dy + dz * dz
+                @kid_r[m] = -1 - @kids[s]
+                m += 1
                 s += 1
               end
             else
               while s < e
-                node = kids[s]
-                heap.push(t.mindist3(node, qx, qy, qz), node)
+                o = @kids[s] * 6
+                lo = @nbox[o]
+                hi3 = @nbox[o + 3]
+                dx = qx < lo ? lo - qx : (qx > hi3 ? qx - hi3 : 0.0)
+                lo = @nbox[o + 1]
+                hi3 = @nbox[o + 4]
+                dy = qy < lo ? lo - qy : (qy > hi3 ? qy - hi3 : 0.0)
+                lo = @nbox[o + 2]
+                hi3 = @nbox[o + 5]
+                dz = qz < lo ? lo - qz : (qz > hi3 ? qz - hi3 : 0.0)
+                @kid_d[m] = dx * dx + dy * dy + dz * dz
+                @kid_r[m] = @kids[s]
+                m += 1
                 s += 1
               end
+            end
+            k = 0
+            while k < m
+              heap_push(@kid_d[k], @kid_r[k])
+              k += 1
             end
           end
         end
@@ -1216,6 +1264,44 @@ module AirportFinder
         k += 1
       end
       Hits.new(sd, si)
+    end
+
+    def heap_push(d, r)
+      i = @heap_n
+      @heap_n = i + 1
+      if i == @heap_d.size
+        @heap_d << d
+        @heap_r << r
+      end
+      while i > 0
+        p = (i - 1) / 2
+        break if @heap_d[p] <= d
+        @heap_d[i] = @heap_d[p]
+        @heap_r[i] = @heap_r[p]
+        i = p
+      end
+      @heap_d[i] = d
+      @heap_r[i] = r
+    end
+
+    def heap_pop
+      n = @heap_n - 1
+      @heap_n = n
+      return if n == 0
+      d = @heap_d[n]
+      r = @heap_r[n]
+      i = 0
+      while true
+        c = 2 * i + 1
+        break if c >= n
+        c += 1 if c + 1 < n && @heap_d[c + 1] < @heap_d[c]
+        break if d <= @heap_d[c]
+        @heap_d[i] = @heap_d[c]
+        @heap_r[i] = @heap_r[c]
+        i = c
+      end
+      @heap_d[i] = d
+      @heap_r[i] = r
     end
 
     # The largest distance, by total_cmp.

@@ -208,8 +208,7 @@ end
 # Ray-casting point-in-polygon over the whole of ring r: the reference
 # Rings#contains is checked against.
 def point_in_polygon(lng, lat, rings, r)
-  xs = rings.xs
-  ys = rings.ys
+  pts = rings.pts
   base = rings.first[r]
   n = rings.n[r]
   inside = false
@@ -217,9 +216,10 @@ def point_in_polygon(lng, lat, rings, r)
   j = n - 1
   i = 0
   while i < n
-    yi = ys[base + i]
-    yj = ys[base + j]
-    if (yi > lat) != (yj > lat) && lng < (xs[base + j] - xs[base + i]) * (lat - yi) / (yj - yi) + xs[base + i]
+    yi = pts[2 * (base + i) + 1]
+    yj = pts[2 * (base + j) + 1]
+    xi = pts[2 * (base + i)]
+    if (yi > lat) != (yj > lat) && lng < (pts[2 * (base + j)] - xi) * (lat - yi) / (yj - yi) + xi
       inside = !inside
     end
     j = i
@@ -234,10 +234,10 @@ def test_ring_contains_matches_ray_cast
   rings = AirportFinder.state.rings
   r = 0
   while r < rings.size
-    min_lng = rings.min_lng[r]
-    min_lat = rings.min_lat[r]
-    max_lng = rings.max_lng[r]
-    max_lat = rings.max_lat[r]
+    min_lng = rings.box[5 * r]
+    min_lat = rings.box[5 * r + 1]
+    max_lng = rings.box[5 * r + 2]
+    max_lat = rings.box[5 * r + 3]
     w = max_lng - min_lng
     h = max_lat - min_lat
     lngs = []
@@ -251,8 +251,8 @@ def test_ring_contains_matches_ray_cast
     step = n / 20 + 1
     k = 0
     while k < n
-      x = rings.xs[rings.first[r] + k]
-      y = rings.ys[rings.first[r] + k]
+      x = rings.pts[2 * (rings.first[r] + k)]
+      y = rings.pts[2 * (rings.first[r] + k) + 1]
       lngs << x << x - 1e-7 << x + 1e-7 << rand.next(min_lng, max_lng)
       lats << y << y << y << y
       k += step
