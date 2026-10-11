@@ -78,29 +78,47 @@ unit of 4 MB or more, which the embedded data makes this one.
 
 ## Results
 
-Apple M1 (Mac mini, 16 GB), macOS 26, 2026-10-10. Rust 1.93.1 (release,
-LTO); Spinel at master a3260d1a3 (`spinel --version`: 2026.09.12+7752)
+Apple M1 (Mac mini, 16 GB), macOS 26, 2026-10-12. Rust 1.93.1 (release,
+LTO); Spinel at master 6b6f4602c (`spinel --version`: 2026.09.12+8185)
 with Apple clang 21, `-O2`;
 CRuby 4.0.7. The crate is 0.3.1 with the enclave fix. Each cell is the
 median over 5 interleaved rounds of each round's median per call; 10,000
 points per set. The machine was lightly loaded; rounds of the compiled
-code varied by 5% at most.
+code varied by 3% at most.
 
 | | Rust | Spinel | CRuby + YJIT | CRuby | Spinel / Rust | YJIT / Spinel |
 |---|---|---|---|---|---|---|
-| find_nearest_airport, near airports | 3.28 µs | 4.30 µs | 40.0 µs | 109 µs | 1.31× | 9.29× |
-| find_nearest_airport, anywhere | 12.5 µs | 17.4 µs | 153 µs | 534 µs | 1.39× | 8.78× |
-| country_at, anywhere | 11.8 µs | 16.4 µs | 147 µs | 524 µs | 1.39× | 9.00× |
-| AirportSet.all.nearest(limit 5), anywhere | 2.85 µs | 4.24 µs | 32.5 µs | 79.7 µs | 1.49× | 7.66× |
-| subset.resolve(300 km), near airports | 3.60 µs | 4.83 µs | 38.6 µs | 118 µs | 1.34× | 8.00× |
-| AirportSet.all (build) | 4.0 ms | 7.6 ms | 41.3 ms | 72.8 ms | 1.93× | 5.40× |
-| first call (parse data, build indices) | 24.9 ms | 33.5 ms | 246 ms | 831 ms | 1.34× | 7.34× |
-| max RSS after first call | 34.1 MB | 26.4 MB | 46.3 MB | 44.5 MB | 0.77× | |
+| find_nearest_airport, near airports | 3.28 µs | 3.90 µs | 40.0 µs | 109 µs | 1.19× | 10.26× |
+| find_nearest_airport, anywhere | 12.5 µs | 15.4 µs | 153 µs | 535 µs | 1.23× | 9.93× |
+| country_at, anywhere | 11.8 µs | 14.3 µs | 148 µs | 524 µs | 1.22× | 10.30× |
+| AirportSet.all.nearest(limit 5), anywhere | 2.86 µs | 3.80 µs | 32.5 µs | 79.6 µs | 1.33× | 8.57× |
+| subset.resolve(300 km), near airports | 3.60 µs | 4.38 µs | 38.7 µs | 118 µs | 1.22× | 8.84× |
+| AirportSet.all (build) | 4.0 ms | 7.8 ms | 41.2 ms | 72.7 ms | 1.96× | 5.29× |
+| first call (parse data, build indices) | 24.8 ms | 33.9 ms | 246 ms | 830 ms | 1.37× | 7.24× |
+| max RSS after first call | 34.0 MB | 28.3 MB | 46.3 MB | 44.5 MB | 0.83× | |
 
 "Near airports" is within ±0.25° of a random airport; "anywhere" is uniform
 over the sphere, about 70% ocean, where the radial search and the nearby
 airport fallback run. Binaries, data embedded: 6.1 MB each. Build: 6.4 s
 for the crate and harness after a touch (LTO), 3.0 s for Spinel.
+
+On x86-64 the gap is narrower for the country lookups and wider for
+`nearest`: AMD Ryzen 5 6600H, Linux, gcc 14.2, the same Spinel master,
+pinned to one core, medians of 7 interleaved rounds (Rust and Spinel
+only):
+
+| | Rust | Spinel | Spinel / Rust |
+|---|---|---|---|
+| find_nearest_airport, near airports | 3.27 µs | 4.01 µs | 1.23× |
+| find_nearest_airport, anywhere | 12.4 µs | 13.8 µs | 1.11× |
+| country_at, anywhere | 11.6 µs | 12.4 µs | 1.07× |
+| AirportSet.all.nearest(limit 5), anywhere | 2.99 µs | 4.53 µs | 1.51× |
+| subset.resolve(300 km), near airports | 3.72 µs | 4.75 µs | 1.28× |
+| AirportSet.all (build) | 4.2 ms | 8.1 ms | 1.93× |
+
+Before the crate's cec4cfd its answers differed on x86-64 at ten airports'
+antipodes: haversine is NaN there, x86-64's default NaN has its sign
+bit set, and `total_cmp` listed that airport first. Both now list it last.
 
 ## Writing Ruby for Spinel
 
