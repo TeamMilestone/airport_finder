@@ -351,7 +351,13 @@ fn haversine(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
     let a = (d_lat / 2.0).sin().powi(2)
         + lat1r.cos() * lat2r.cos() * (d_lng / 2.0).sin().powi(2);
     let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
-    R * c
+    // At the antipode `a` can round past 1, and the root of 1 - a is NaN. Its
+    // sign is the CPU's default NaN, negative on x86-64 and positive on
+    // AArch64, and total_cmp sorts a negative NaN before every distance:
+    // nearest listed the airport opposite the point first on x86-64. The
+    // NaN is made positive, so it sorts last everywhere; a distance is never
+    // negative, so `abs` leaves every other value as it is.
+    (R * c).abs()
 }
 
 /// Ray-casting point-in-polygon (GeoJSON coordinate order: [lng, lat]).
@@ -872,6 +878,20 @@ pub extern "C" fn airport_finder_free(ptr: *mut c_char) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn antipode_sorts_last() {
+        // Exactly opposite APR haversine is NaN, as it is for a few other
+        // airports' antipodes. That airport is the farthest, not the nearest.
+        let ap = airport("apr").unwrap();
+        let (lat, lng) = (-ap.lat, normalize_lng(ap.lng + 180.0));
+        let d = haversine(lat, lng, ap.lat, ap.lng);
+        assert!(!d.is_nan() || d.is_sign_positive(), "a negative NaN sorts first");
+        let hits = AirportSet::all().nearest(lat, lng, None, None, 3).unwrap();
+        assert_eq!(hits.len(), 3);
+        assert!(hits.iter().all(|h| h.airport.iata != "APR" && h.distance_km.is_finite()), "{:?}",
+                hits.iter().map(|h| (h.airport.iata.as_str(), h.distance_km)).collect::<Vec<_>>());
+    }
 
     #[test]
     fn finds_seoul() {
